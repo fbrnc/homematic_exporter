@@ -203,13 +203,18 @@ class HomematicMetricsProcessor(threading.Thread):
                                           labelnames=['ccu', 'interface', 'interface_type'], namespace=self.METRICS_NAMESPACE)
         self.interface_connected = Gauge('interface_connected', 'Whether the CCU radio interface is connected',
                                          labelnames=['ccu', 'interface', 'interface_type'], namespace=self.METRICS_NAMESPACE)
+        self.last_event = Gauge('last_event_timestamp_seconds', 'Time of the newest datapoint update of the device in the CCU',
+                                labelnames=['ccu', 'device', 'device_type', 'mapped_name'], namespace=self.METRICS_NAMESPACE)
 
     def generate_metrics(self):
         logging.info("Gathering metrics")
 
         self.generate_interface_metrics()
 
-        for device in self.fetch_devices_list():
+        devices = self.fetch_devices_list()
+        self.generate_last_event_metrics(devices)
+
+        for device in devices:
             devType = device.get('TYPE')
             devParentType = device.get('PARENT_TYPE')
             devParentAddress = device.get('PARENT')
@@ -284,6 +289,48 @@ class HomematicMetricsProcessor(threading.Thread):
                 self.interface_duty_cycle.labels(**labels).set(interface.get('DUTY_CYCLE'))
             if interface.get('CONNECTED') is not None:
                 self.interface_connected.labels(**labels).set(1 if interface.get('CONNECTED') else 0)
+
+    def generate_last_event_metrics(self, devices):
+        # Devices that only send on user interaction (buttons, remotes) never become UNREACH,
+        # the time of their last event is the only hint for an empty battery.
+        script_last_events = """
+      string devId; string chId; string dpId; integer last; integer ts;
+      foreach(devId, root.Devices().EnumUsedIDs()) {
+        object dev = dom.GetObject(devId);
+        last = 0;
+        foreach(chId, dev.Channels().EnumUsedIDs()) {
+          foreach(dpId, dom.GetObject(chId).DPs().EnumUsedIDs()) {
+            ts = dom.GetObject(dpId).Timestamp().ToInteger();
+            if (ts > last) { last = ts; }
+          }
+        }
+        WriteLine(dev.Address() # "\t" # last);
+      }
+      """
+        supported = {device.get('ADDRESS'): device.get('TYPE') for device in devices
+                     if device.get('PARENT') == '' and device.get('TYPE') in self.supported_device_types}
+        try:
+            lines = self.run_rega_script(script_last_events)
+        except OSError as error:
+            logging.info("Failed to read last events: {0}".format(error))
+            return
+
+        for line in lines:
+            address, _, timestamp = line.partition("\t")
+            if address in supported and timestamp.isdigit() and int(timestamp) > 0:
+                self.last_event.labels(
+                    ccu=self.ccu_host,
+                    device=address,
+                    device_type=supported[address],
+                    mapped_name=self.resolve_mapped_name(address, address)).set(int(timestamp))
+
+    def run_rega_script(self, script):
+        """Runs a script via the CCU Script API (port 8181), returns the output lines"""
+        url = "http://{}:8181/tclrega.exe".format(self.ccu_host)
+        response = requests.post(url, auth=self.auth, data=script, timeout=10)
+        response.raise_for_status()
+        # the output is followed by a line starting with <xml><exec> containing the script variables
+        return [line for line in response.text.splitlines() if not line.startswith("<xml><exec>")]
 
     def create_proxy(self):
         transport = xmlrpc.client.Transport()

@@ -52,6 +52,7 @@ def test_channels_only(processor):
     with mock.patch.object(processor, 'supported_device_types', ['HM-LC-Sw4-PCB', 'HM-PB-6-WM55']), \
             mock.patch.object(processor, 'channels_only', {'HM-LC-Sw4-PCB': [0]}), \
             mock.patch.object(processor, 'fetch_interfaces_list', return_value=[]), \
+            mock.patch.object(processor, 'run_rega_script', return_value=[]), \
             mock.patch.object(processor, 'fetch_devices_list', return_value=devices), \
             mock.patch.object(processor, 'fetch_param_set_description', return_value=description) as fetch_description, \
             mock.patch.object(processor, 'fetch_param_set', return_value={'UNREACH': False}) as fetch:
@@ -76,3 +77,30 @@ def test_enum_with_empty_states_has_no_duplicates(processor):
 
     processor.process_enum('SCO0001:1', 'SHUTTER_CONTACT', 'SCO0001', 'HM-Sec-SCo', 'ERROR', 7, states)
     assert REGISTRY.get_sample_value('homematic_error_set', dict(labels, homematic_error_set='SABOTAGE')) == 1
+
+
+def device(address, device_type):
+    return {'ADDRESS': address, 'PARENT': '', 'TYPE': device_type, 'PARENT_TYPE': '', 'PARAMSETS': ['MASTER'], 'CHILDREN': []}
+
+
+def test_last_event(processor):
+    devices = [device('BTN0002', 'HM-PB-6-WM55'), device('BTN0003', 'HM-PB-6-WM55'), device('UNS0001', 'HM-UNSUPPORTED'),
+               channel('BTN0002:1', 'HM-PB-6-WM55', 'KEY')]
+    lines = ['BTN0002\t1793251864', 'BTN0003\t0', 'UNS0001\t1793251864', 'OTHER01\t1793251864', 'BidCoS-RF\t']
+
+    with mock.patch.object(processor, 'supported_device_types', ['HM-PB-6-WM55']), \
+            mock.patch.object(processor, 'run_rega_script', return_value=lines):
+        processor.generate_last_event_metrics(devices)
+
+    def value(address):
+        return REGISTRY.get_sample_value('homematic_last_event_timestamp_seconds',
+                                         {'ccu': CCU, 'device': address, 'device_type': 'HM-PB-6-WM55', 'mapped_name': address})
+    assert value('BTN0002') == 1793251864
+    assert value('BTN0003') is None
+    lines = [line for line in generate_latest().decode().splitlines() if line.startswith('homematic_last_event_timestamp_seconds{')]
+    assert len(lines) == 1
+
+
+def test_last_event_failure_does_not_raise(processor):
+    with mock.patch.object(processor, 'run_rega_script', side_effect=OSError('Connection refused')):
+        processor.generate_last_event_metrics([])

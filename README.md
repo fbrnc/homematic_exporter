@@ -90,6 +90,10 @@ On every run the exporter also calls `listBidcosInterfaces` and exports per radi
 
 The call is answered by the CCU itself without radio traffic. It works on both ports (2001 and 2010).
 
+### Last event per device
+
+`homematic_last_event_timestamp_seconds` (labels `ccu`, `device`, `device_type`, `mapped_name`) is the Unix time of the newest datapoint update of a device in the CCU, read via the Script API (port 8181). It is exported for the top-level devices of the polled interface that are in `supported_device_types`. Devices that only send on user interaction (buttons, remotes) are never reported as unreachable by the CCU; this metric shows when they were last heard of, e.g. `time() - homematic_last_event_timestamp_seconds > 30 * 86400`.
+
 ### Restricting channels
 
 For some BidCos-RF actors (e.g. `HM-LC-Sw4-PCB`, `HM-LC-Bl1PBU-FM`, `HM-LC-Sw1-Pl-DN-R1`, `HM-ES-PMSw1-Pl-DN-R1`) reading the status channels is not answered from the CCU cache but triggers a radio request on every run. With several of them this can use up a large part of the duty cycle. `channels_only` in the config file limits the channels read per parent device type; all other channels of that type are skipped. Types not listed are read completely.
