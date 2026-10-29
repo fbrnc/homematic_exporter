@@ -92,7 +92,7 @@ The call is answered by the CCU itself without radio traffic. It works on both p
 
 ### Last event per device
 
-`homematic_last_event_timestamp_seconds` (labels `ccu`, `device`, `device_type`, `mapped_name`) is the Unix time of the newest datapoint update of a device in the CCU, read via the Script API (port 8181). It is exported for the top-level devices of the polled interface that are in `supported_device_types`. Devices that only send on user interaction (buttons, remotes) are never reported as unreachable by the CCU; this metric shows when they were last heard of, e.g. `time() - homematic_last_event_timestamp_seconds > 30 * 86400`.
+`homematic_last_event_timestamp_seconds` (labels `ccu`, `device`, `device_type`, `mapped_name`) is the Unix time of the newest datapoint update of a device in the CCU, read via the Script API (port 8181). It is exported for the top-level devices of the polled interface that are in `supported_device_types`. Datapoints written by the CCU itself (`CONFIG_PENDING`, `UPDATE_PENDING`, `UNREACH`, `STICKY_UNREACH`) are ignored. The CCU does not keep these timestamps across a restart; devices without any event since then are exported as `0` and can be combined with `homematic_ccu_uptime_seconds`. Devices that only send on user interaction (buttons, remotes) are never reported as unreachable by the CCU; this metric shows when they were last heard of, e.g. `time() - homematic_last_event_timestamp_seconds > 30 * 86400`.
 
 ### Service and alarm messages
 

@@ -303,15 +303,21 @@ class HomematicMetricsProcessor(threading.Thread):
     def generate_last_event_metrics(self, devices):
         # Devices that only send on user interaction (buttons, remotes) never become UNREACH,
         # the time of their last event is the only hint for an empty battery.
+        # Datapoints written by the CCU itself are ignored. Timestamps don't survive a CCU restart,
+        # devices without any event since then are exported as 0.
         script_last_events = """
-      string devId; string chId; string dpId; integer last; integer ts;
+      string devId; string chId; string dpId; integer last; integer ts; object dp;
+      string ccuSide = ",CONFIG_PENDING,UPDATE_PENDING,UNREACH,STICKY_UNREACH,";
       foreach(devId, root.Devices().EnumUsedIDs()) {
         object dev = dom.GetObject(devId);
         last = 0;
         foreach(chId, dev.Channels().EnumUsedIDs()) {
           foreach(dpId, dom.GetObject(chId).DPs().EnumUsedIDs()) {
-            ts = dom.GetObject(dpId).Timestamp().ToInteger();
-            if (ts > last) { last = ts; }
+            dp = dom.GetObject(dpId);
+            if (ccuSide.Find("," # dp.HssType() # ",") < 0) {
+              ts = dp.Timestamp().ToInteger();
+              if (ts > last) { last = ts; }
+            }
           }
         }
         WriteLine(dev.Address() # "\t" # last);
@@ -327,7 +333,7 @@ class HomematicMetricsProcessor(threading.Thread):
 
         for line in lines:
             address, _, timestamp = line.partition("\t")
-            if address in supported and timestamp.isdigit() and int(timestamp) > 0:
+            if address in supported and timestamp.isdigit():
                 self.last_event.labels(
                     ccu=self.ccu_host,
                     device=address,

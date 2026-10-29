@@ -96,9 +96,10 @@ def test_last_event(processor):
         return REGISTRY.get_sample_value('homematic_last_event_timestamp_seconds',
                                          {'ccu': CCU, 'device': address, 'device_type': 'HM-PB-6-WM55', 'mapped_name': address})
     assert value('BTN0002') == 1793251864
-    assert value('BTN0003') is None
+    # no event since the CCU started
+    assert value('BTN0003') == 0
     lines = [line for line in generate_latest().decode().splitlines() if line.startswith('homematic_last_event_timestamp_seconds{')]
-    assert len(lines) == 1
+    assert len(lines) == 2
 
 
 def test_last_event_failure_does_not_raise(processor):
