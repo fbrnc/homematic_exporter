@@ -104,3 +104,30 @@ def test_last_event(processor):
 def test_last_event_failure_does_not_raise(processor):
     with mock.patch.object(processor, 'run_rega_script', side_effect=OSError('Connection refused')):
         processor.generate_last_event_metrics([])
+
+
+def test_messages(processor):
+    lines = ['S\tAL-ACT0002:0.STICKY_UNREACH', 'S\tAL-0009DD89A529E2:0.UNREACH', 'S\tsomething else',
+             'A\tAlarmzone 1\t0', 'A\tWatchDog-Alarm\t1']
+    with mock.patch.object(processor, 'run_rega_script', return_value=lines):
+        processor.generate_message_metrics()
+
+    def message(address, message_type):
+        return REGISTRY.get_sample_value('homematic_service_message',
+                                         {'ccu': CCU, 'device': address, 'mapped_name': address, 'type': message_type})
+    assert message('ACT0002', 'STICKY_UNREACH') == 1
+    assert message('0009DD89A529E2', 'UNREACH') == 1
+    assert REGISTRY.get_sample_value('homematic_alarm_message', {'ccu': CCU, 'name': 'Alarmzone 1'}) == 0
+    assert REGISTRY.get_sample_value('homematic_alarm_message', {'ccu': CCU, 'name': 'WatchDog-Alarm'}) == 1
+
+    # acknowledged messages disappear
+    with mock.patch.object(processor, 'run_rega_script', return_value=['S\tAL-0009DD89A529E2:0.UNREACH', 'A\tWatchDog-Alarm\t0']):
+        processor.generate_message_metrics()
+    assert message('ACT0002', 'STICKY_UNREACH') is None
+    assert message('0009DD89A529E2', 'UNREACH') == 1
+    assert REGISTRY.get_sample_value('homematic_alarm_message', {'ccu': CCU, 'name': 'WatchDog-Alarm'}) == 0
+
+
+def test_messages_failure_does_not_raise(processor):
+    with mock.patch.object(processor, 'run_rega_script', side_effect=OSError('Connection refused')):
+        processor.generate_message_metrics()

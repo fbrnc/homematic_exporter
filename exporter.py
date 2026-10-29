@@ -205,11 +205,18 @@ class HomematicMetricsProcessor(threading.Thread):
                                          labelnames=['ccu', 'interface', 'interface_type'], namespace=self.METRICS_NAMESPACE)
         self.last_event = Gauge('last_event_timestamp_seconds', 'Time of the newest datapoint update of the device in the CCU',
                                 labelnames=['ccu', 'device', 'device_type', 'mapped_name'], namespace=self.METRICS_NAMESPACE)
+        self.service_message = Gauge('service_message', 'Active service message of the CCU',
+                                     labelnames=['ccu', 'device', 'mapped_name', 'type'], namespace=self.METRICS_NAMESPACE)
+        self.service_message_labels = set()
+        self.alarm_message = Gauge('alarm_message', 'Whether the alarm system variable of the CCU is active',
+                                   labelnames=['ccu', 'name'], namespace=self.METRICS_NAMESPACE)
 
     def generate_metrics(self):
         logging.info("Gathering metrics")
 
         self.generate_interface_metrics()
+
+        self.generate_message_metrics()
 
         devices = self.fetch_devices_list()
         self.generate_last_event_metrics(devices)
@@ -323,6 +330,49 @@ class HomematicMetricsProcessor(threading.Thread):
                     device=address,
                     device_type=supported[address],
                     mapped_name=self.resolve_mapped_name(address, address)).set(int(timestamp))
+
+    def generate_message_metrics(self):
+        # Service messages cover all devices and interfaces (e.g. STICKY_UNREACH), alarm system
+        # variables include the WatchDog alarm of RaspberryMatic/OpenCCU.
+        script_messages = """
+      string id; integer active;
+      foreach(id, dom.GetObject(ID_SERVICES).EnumUsedIDs()) {
+        object msg = dom.GetObject(id);
+        if (msg.AlState() == asOncoming) { WriteLine("S\t" # msg.Name()); }
+      }
+      foreach(id, dom.GetObject(ID_SYSTEM_VARIABLES).EnumUsedIDs()) {
+        object var = dom.GetObject(id);
+        if (var.IsTypeOf(OT_ALARMDP)) {
+          active = 0;
+          if (var.AlState() == asOncoming) { active = 1; }
+          WriteLine("A\t" # var.Name() # "\t" # active);
+        }
+      }
+      """
+        try:
+            lines = self.run_rega_script(script_messages)
+        except OSError as error:
+            logging.info("Failed to read service messages: {0}".format(error))
+            return
+
+        service_message_labels = set()
+        for line in lines:
+            (kind, name, *value) = line.split("\t") + ['']
+            if kind == 'S':
+                # e.g. AL-OEQ1211293:0.STICKY_UNREACH
+                match = re.match(r"^AL-([^:]+):\d+\.(.+)$", name)
+                if not match:
+                    continue
+                address = match.group(1)
+                labels = (self.ccu_host, address, self.resolve_mapped_name(address, address), match.group(2))
+                self.service_message.labels(*labels).set(1)
+                service_message_labels.add(labels)
+            elif kind == 'A':
+                self.alarm_message.labels(self.ccu_host, name).set(1 if value[0] == '1' else 0)
+
+        for labels in self.service_message_labels - service_message_labels:
+            self.service_message.remove(*labels)
+        self.service_message_labels = service_message_labels
 
     def run_rega_script(self, script):
         """Runs a script via the CCU Script API (port 8181), returns the output lines"""
