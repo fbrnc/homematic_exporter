@@ -131,3 +131,18 @@ def test_messages(processor):
 def test_messages_failure_does_not_raise(processor):
     with mock.patch.object(processor, 'run_rega_script', side_effect=OSError('Connection refused')):
         processor.generate_message_metrics()
+
+
+def test_ccu_info(processor):
+    lines = ['VERSION=3.83.6.20250824', 'PRODUCT=raspmatic_rpi3', 'PLATFORM=rpi3', '', '14231123.72 55457758.35', '']
+    with mock.patch.object(processor, 'run_rega_script', return_value=lines):
+        processor.generate_ccu_metrics()
+
+    assert REGISTRY.get_sample_value('homematic_ccu_info', {'ccu': CCU, 'version': '3.83.6.20250824',
+                                                            'product': 'raspmatic_rpi3', 'platform': 'rpi3'}) == 1
+    assert REGISTRY.get_sample_value('homematic_ccu_uptime_seconds', {'ccu': CCU}) == 14231123.72
+
+
+def test_ccu_info_failure_does_not_raise(processor):
+    with mock.patch.object(processor, 'run_rega_script', side_effect=OSError('Connection refused')):
+        processor.generate_ccu_metrics()

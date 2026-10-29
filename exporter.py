@@ -16,7 +16,7 @@ from socketserver import ThreadingMixIn
 from http.server import HTTPServer
 from pprint import pformat
 import requests
-from prometheus_client import Gauge, Counter, Enum, MetricsHandler, core, Summary, start_http_server
+from prometheus_client import Gauge, Counter, Enum, Info, MetricsHandler, core, Summary, start_http_server
 
 
 class HomematicMetricsProcessor(threading.Thread):
@@ -210,6 +210,8 @@ class HomematicMetricsProcessor(threading.Thread):
         self.service_message_labels = set()
         self.alarm_message = Gauge('alarm_message', 'Whether the alarm system variable of the CCU is active',
                                    labelnames=['ccu', 'name'], namespace=self.METRICS_NAMESPACE)
+        self.ccu_info = Info('ccu', 'Firmware of the CCU', labelnames=['ccu'], namespace=self.METRICS_NAMESPACE)
+        self.ccu_uptime = Gauge('ccu_uptime_seconds', 'Uptime of the CCU', labelnames=['ccu'], namespace=self.METRICS_NAMESPACE)
 
     def generate_metrics(self):
         logging.info("Gathering metrics")
@@ -217,6 +219,7 @@ class HomematicMetricsProcessor(threading.Thread):
         self.generate_interface_metrics()
 
         self.generate_message_metrics()
+        self.generate_ccu_metrics()
 
         devices = self.fetch_devices_list()
         self.generate_last_event_metrics(devices)
@@ -373,6 +376,29 @@ class HomematicMetricsProcessor(threading.Thread):
         for labels in self.service_message_labels - service_message_labels:
             self.service_message.remove(*labels)
         self.service_message_labels = service_message_labels
+
+    def generate_ccu_metrics(self):
+        # /VERSION exists on CCU3, RaspberryMatic and OpenCCU, e.g. VERSION=3.83.6.20250824, PRODUCT=raspmatic_rpi3
+        script_ccu = """
+      string out; string err;
+      system.Exec("cat /VERSION /proc/uptime", &out, &err);
+      WriteLine(out);
+      """
+        try:
+            lines = self.run_rega_script(script_ccu)
+        except OSError as error:
+            logging.info("Failed to read CCU info: {0}".format(error))
+            return
+
+        info = {}
+        for line in lines:
+            key, separator, value = line.partition("=")
+            if separator and key in ['VERSION', 'PRODUCT', 'PLATFORM']:
+                info[key.lower()] = value.strip()
+            elif re.match(r"^\d+(\.\d+)? ", line):
+                self.ccu_uptime.labels(self.ccu_host).set(float(line.split()[0]))
+        if info:
+            self.ccu_info.labels(self.ccu_host).info(info)
 
     def run_rega_script(self, script):
         """Runs a script via the CCU Script API (port 8181), returns the output lines"""

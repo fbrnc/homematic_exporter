@@ -101,6 +101,13 @@ Read via the Script API (port 8181), CCU-wide (a second instance for another por
 * `homematic_service_message` (labels `ccu`, `device`, `mapped_name`, `type`): 1 for every active service message, e.g. `UNREACH`, `STICKY_UNREACH`, `LOWBAT`, `CONFIG_PENDING`. Covers all devices, also those of unsupported types. The series disappears when the message is gone or acknowledged.
 * `homematic_alarm_message` (labels `ccu`, `name`): 1 if the alarm system variable is active, otherwise 0. On RaspberryMatic/OpenCCU this includes `WatchDog-Alarm` (e.g. duty cycle >= 98 %, radio module not connected).
 
+### CCU firmware and uptime
+
+Read via the Script API (`system.Exec` of `cat /VERSION /proc/uptime`):
+
+* `homematic_ccu_info` (labels `ccu`, `version`, `product`, `platform`), e.g. `version="3.83.6.20250824"`, `product="raspmatic_rpi3"`
+* `homematic_ccu_uptime_seconds`
+
 ### Restricting channels
 
 For some BidCos-RF actors (e.g. `HM-LC-Sw4-PCB`, `HM-LC-Bl1PBU-FM`, `HM-LC-Sw1-Pl-DN-R1`, `HM-ES-PMSw1-Pl-DN-R1`) reading the status channels is not answered from the CCU cache but triggers a radio request on every run. With several of them this can use up a large part of the duty cycle. `channels_only` in the config file limits the channels read per parent device type; all other channels of that type are skipped. Types not listed are read completely.
