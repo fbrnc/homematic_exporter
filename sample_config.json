@@ -7,6 +7,9 @@
     "HmIP-FSM",
     "HmIP-SWD"
   ],
+  "channels_only": {
+    "HM-LC-Sw4-PCB": [0]
+  },
   "device_mapping": {
     "00112233445566": "Garden",
     "00778899aaccdd": "Room1"

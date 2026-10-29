@@ -1,5 +1,7 @@
 # homematic_exporter
 
+> Fork of [sfudeus/homematic_exporter](https://github.com/sfudeus/homematic_exporter) with radio interface metrics (duty cycle), per-type channel restriction (`channels_only`) and a fix for duplicate enum series. Image: `ghcr.io/fbrnc/homematic_exporter`.
+
 A simple tool to export data from [Homematic](https://www.homematic.com/) devices for consumption by [Prometheus](https://prometheus.io/), written in Python 3.
 
 `homematic_exporter` will listen on a freely definable port and emit data in prometheus format which is periodically fetched via XML-RPC from CCU3. The fetching period is configurable, too.
@@ -77,6 +79,30 @@ All metrics are equipped with labels for the `ccu` instance, the device address,
 In addition a device mapping can be added via `--config_file`. Device addresses can be mapped to custom names which are then usable as labels in e.g. Grafana.
 If no mappings are in the config file, the names from the CCU user interface are used and exposed as label `mapped_name`.
 
+Unused entries of an enum value list (empty strings in the CCU, e.g. for `ERROR` of `HM-Sec-SCo`) are exported with their index as state name, so every state is a distinct series.
+
+### Radio interface metrics
+
+On every run the exporter also calls `listBidcosInterfaces` and exports per radio interface (labels `ccu`, `interface`, `interface_type`):
+
+* `homematic_interface_duty_cycle`: duty cycle in percent. In the 868 MHz band a sender may only transmit 1 % of each hour; at about 98 % the CCU stops sending, buttons get no acknowledgement and commands are lost.
+* `homematic_interface_connected`: 1 if the interface is connected.
+
+The call is answered by the CCU itself without radio traffic. It works on both ports (2001 and 2010).
+
+### Restricting channels
+
+For some BidCos-RF actors (e.g. `HM-LC-Sw4-PCB`, `HM-LC-Bl1PBU-FM`, `HM-LC-Sw1-Pl-DN-R1`, `HM-ES-PMSw1-Pl-DN-R1`) reading the status channels is not answered from the CCU cache but triggers a radio request on every run. With several of them this can use up a large part of the duty cycle. `channels_only` in the config file limits the channels read per parent device type; all other channels of that type are skipped. Types not listed are read completely.
+
+```json
+"channels_only": {
+  "HM-LC-Sw4-PCB": [0],
+  "HM-LC-Bl1PBU-FM": [0]
+}
+```
+
+Channel `0` (MAINTENANCE) contains `UNREACH`, `CONFIG_PENDING`, `LOWBAT` and the RSSI values.
+
 ## CCU configuration
 
 The CCU needs to be configured to be able to fetch data.
@@ -114,6 +140,8 @@ If you want support for more devices, you can easily extend them via config file
 Feel free to open issues for unsupported items.
 
 ## Build
+
+This fork builds `ghcr.io/fbrnc/homematic_exporter` (linux/amd64, linux/arm64) via GitHub Actions on every push to `master` and on tags `v*`. Tests: `pytest`.
 
 For multi-architecture builds (x86, arm, arm64), e.g. use `docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 -t sfudeus/homematic_exporter:latest .` or use `build.sh`.
 

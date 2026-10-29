@@ -113,6 +113,10 @@ class HomematicMetricsProcessor(threading.Thread):
     mapped_names = {}
     supported_device_types = DEFAULT_SUPPORTED_TYPES
     channels_with_errors_allowed = DEFAULT_CHANNELS_WITH_ERRORS_ALLOWED
+    # Optional map of parent device type to the only channel numbers to read.
+    # Reading the status channels of some BidCos-RF actors triggers a radio
+    # request on every call and eats up the duty cycle of the CCU.
+    channels_only = {}
 
     device_count = None
     metrics = {}
@@ -178,6 +182,7 @@ class HomematicMetricsProcessor(threading.Thread):
                 self.mapped_names = config.get('device_mapping', {})
                 self.supported_device_types = config.get('supported_device_types', self.DEFAULT_SUPPORTED_TYPES)
                 self.channels_with_errors_allowed = config.get('channels_with_errors_allowed', self.DEFAULT_CHANNELS_WITH_ERRORS_ALLOWED)
+                self.channels_only = config.get('channels_only', {})
 
         self.ccu_host = ccu_host
         self.ccu_port = ccu_port
@@ -194,9 +199,15 @@ class HomematicMetricsProcessor(threading.Thread):
         self.refresh_time = time.time()
         self.refresh_age = Gauge("refresh_age_seconds", "Seconds since the last successful refresh.", labelnames=["ccu"], namespace=self.METRICS_NAMESPACE)
         self.refresh_age.labels(self.ccu_host).set_function(lambda: time.time() - self.refresh_time)
+        self.interface_duty_cycle = Gauge('interface_duty_cycle', 'Duty cycle of the CCU radio interface in percent',
+                                          labelnames=['ccu', 'interface', 'interface_type'], namespace=self.METRICS_NAMESPACE)
+        self.interface_connected = Gauge('interface_connected', 'Whether the CCU radio interface is connected',
+                                         labelnames=['ccu', 'interface', 'interface_type'], namespace=self.METRICS_NAMESPACE)
 
     def generate_metrics(self):
         logging.info("Gathering metrics")
+
+        self.generate_interface_metrics()
 
         for device in self.fetch_devices_list():
             devType = device.get('TYPE')
@@ -214,10 +225,15 @@ class HomematicMetricsProcessor(threading.Thread):
                 logging.debug("Found device {} of type {} in supported parent type {}".format(devAddress, devType, devParentType))
                 logging.debug(pformat(device))
 
+                channel = int(devAddress[devAddress.find(":") + 1:])
+                onlyChannels = self.channels_only.get(devParentType)
+                if onlyChannels is not None and channel not in onlyChannels:
+                    logging.debug("Skipping channel {} of type {} in parent type {} (channels_only)".format(devAddress, devType, devParentType))
+                    continue
+
                 allowFailedChannel = False
                 invalidChannels = self.channels_with_errors_allowed.get(devParentType)
                 if invalidChannels is not None:
-                    channel = int(devAddress[devAddress.find(":") + 1:])
                     if channel in invalidChannels:
                         allowFailedChannel = True
 
@@ -254,6 +270,21 @@ class HomematicMetricsProcessor(threading.Thread):
                         logging.debug("Paramset for {}".format(devAddress))
                         logging.debug(pformat(paramset))
 
+    def generate_interface_metrics(self):
+        # Answered by the CCU itself, no radio traffic. A failure must not stop the device gathering.
+        try:
+            interfaces = self.fetch_interfaces_list()
+        except (OSError, xmlrpc.client.Error) as error:
+            logging.info("Failed to read radio interfaces: {0}".format(error))
+            return
+
+        for interface in interfaces:
+            labels = {'ccu': self.ccu_host, 'interface': interface.get('ADDRESS', ''), 'interface_type': interface.get('TYPE', '')}
+            if interface.get('DUTY_CYCLE') is not None:
+                self.interface_duty_cycle.labels(**labels).set(interface.get('DUTY_CYCLE'))
+            if interface.get('CONNECTED') is not None:
+                self.interface_connected.labels(**labels).set(1 if interface.get('CONNECTED') else 0)
+
     def create_proxy(self):
         transport = xmlrpc.client.Transport()
         connection = transport.make_connection(self.ccu_host)
@@ -267,6 +298,10 @@ class HomematicMetricsProcessor(threading.Thread):
                 result.append(entry)
             self.devicecount.labels(self.ccu_host).set(len(result))
             return result
+
+    def fetch_interfaces_list(self):
+        with self.create_proxy() as proxy:
+            return proxy.listBidcosInterfaces()
 
     def fetch_param_set_description(self, address):
         with self.create_proxy() as proxy:
@@ -309,6 +344,10 @@ class HomematicMetricsProcessor(threading.Thread):
         if value == '' or value is None:
             logging.debug("Skipping processing enum {} with empty value".format(key))
             return
+
+        # Unused entries of a VALUE_LIST are empty strings, e.g. for ERROR of HM-Sec-SCo.
+        # Name them by their index, otherwise they show up as duplicate series.
+        istates = [state if state != '' else str(index) for index, state in enumerate(istates)]
 
         gaugename = key.lower() + "_set"
         logging.debug("Found enum param {} with value {}, gauge {}".format(key, value, gaugename))
